@@ -1,6 +1,6 @@
 # QR Code Generator
 
-Aplikasi desktop Windows untuk membuat QR Code dari URL, dengan pilihan menambahkan logo di tengah QR Code, mengganti warna, menyimpan hasil sebagai gambar, dan mengirim hasil ke Telegram jika bot sudah dikonfigurasi.
+Aplikasi desktop Windows untuk membuat QR Code dari URL. Aplikasi mendukung sampai 3 link sekaligus, nama file custom untuk tiap QR Code, logo di tengah QR Code, pilihan warna, export ZIP, dan pengiriman ZIP ke Telegram jika bot sudah dikonfigurasi.
 
 ## Download dan Install
 
@@ -25,13 +25,22 @@ Aplikasi akan terpasang di:
 ## Cara Menggunakan
 
 1. Buka aplikasi **QR Code Generator**.
-2. Masukkan URL tujuan QR Code, misalnya `https://example.com`.
-3. Pilih logo jika diperlukan:
+2. Masukkan 1 sampai 3 URL tujuan QR Code, misalnya `https://example.com`.
+3. Isi **Nama file** untuk setiap QR Code. Nama ini akan dipakai sebagai nama file PNG di dalam ZIP.
+4. Pilih logo jika diperlukan:
    - Masukkan URL gambar, atau
    - Klik **Pilih File Lokal** untuk memilih gambar dari komputer.
-4. Pilih warna foreground/background QR Code jika ingin diganti.
-5. Klik **Buat QR Code**.
-6. Klik **Simpan** untuk menyimpan hasil QR Code sebagai PNG/JPG.
+5. Pilih warna foreground/background QR Code jika ingin diganti.
+6. Klik **Buat QR Code**.
+7. Klik **Export ZIP** untuk menyimpan semua QR Code yang dibuat ke dalam satu file ZIP.
+
+Contoh isi ZIP:
+
+```text
+promo_instagram.png
+form_pendaftaran.png
+website_utama.png
+```
 
 ## Fitur Telegram
 
@@ -44,7 +53,7 @@ Untuk mengaktifkan:
 3. Masukkan **Chat ID Tujuan**.
 4. Simpan pengaturan.
 
-Setelah itu, ketika QR Code disimpan, aplikasi dapat mengirim gambar QR Code ke Telegram.
+Setelah itu, ketika ZIP diexport, aplikasi dapat mengirim file ZIP QR Code ke Telegram.
 
 ## Build dari Source
 

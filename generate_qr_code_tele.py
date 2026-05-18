@@ -10,6 +10,7 @@ import sys
 import configparser
 import telebot
 import threading
+import zipfile
 
 try:
     import ttkbootstrap as ttk
@@ -34,10 +35,13 @@ class QRCodeGenerator:
     def __init__(self, root):
         self.root = root
         self.root.title("QR Code Generator")
-        self.root.geometry("820x620")
-        self.root.minsize(820, 620)
+        self.root.geometry("980x680")
+        self.root.minsize(980, 680)
         self.qr_image = None
         self.qr_preview = None
+        self.generated_qrs = []
+        self.qr_previews = []
+        self.qr_inputs = []
         self.telegram_config_file = self._get_config_path("telegram_config.ini")
         self.history_file = self._get_config_path("url_history.txt")
 
@@ -88,11 +92,30 @@ class QRCodeGenerator:
         left_panel = ttk.Labelframe(main_frame, text="  ⚙ Pengaturan QR Code  ", padding=15)
         left_panel.pack(side=LEFT, fill=BOTH, expand=False, padx=(0, 10))
 
-        # URL Input
+        # URL Inputs
         ttk.Label(left_panel, text="URL Tujuan QR Code:", font=("Segoe UI", 10, "bold")).pack(anchor=W, pady=(0, 4))
-        self.url_entry = ttk.Entry(left_panel, width=38, font=("Segoe UI", 10))
-        self.url_entry.pack(fill=X, pady=(0, 5))
-        self.url_entry.insert(0, "https://")
+        for index in range(3):
+            row_frame = ttk.Frame(left_panel)
+            row_frame.pack(fill=X, pady=(0, 5))
+
+            url_frame = ttk.Frame(row_frame)
+            url_frame.pack(side=LEFT, fill=X, expand=True, padx=(0, 5))
+            ttk.Label(url_frame, text=f"Link {index + 1}", font=("Segoe UI", 8)).pack(anchor=W)
+            url_entry = ttk.Entry(url_frame, width=24, font=("Segoe UI", 9))
+            url_entry.pack(fill=X)
+            if index == 0:
+                url_entry.insert(0, "https://")
+
+            name_frame = ttk.Frame(row_frame)
+            name_frame.pack(side=RIGHT, fill=X, expand=False)
+            ttk.Label(name_frame, text="Nama file", font=("Segoe UI", 8)).pack(anchor=W)
+            name_entry = ttk.Entry(name_frame, width=14, font=("Segoe UI", 9))
+            name_entry.pack(fill=X)
+            name_entry.insert(0, f"qrcode_{index + 1}")
+
+            self.qr_inputs.append({"url": url_entry, "name": name_entry})
+
+        self.url_entry = self.qr_inputs[0]["url"]
 
         # History Combobox
         if self.url_history:
@@ -175,12 +198,12 @@ class QRCodeGenerator:
         action_frame.pack(fill=X, pady=(0, 5))
 
         if HAS_TTKBOOTSTRAP:
-            self.save_btn = ttk.Button(action_frame, text="💾 Simpan", command=self.save_and_send_qr,
+            self.save_btn = ttk.Button(action_frame, text="💾 Export ZIP", command=self.save_and_send_qr,
                                        bootstyle="info", padding=(10, 8), state=DISABLED)
             self.telegram_btn = ttk.Button(action_frame, text="📨 Telegram", command=self.open_telegram_settings,
                                            bootstyle="primary-outline", padding=(10, 8))
         else:
-            self.save_btn = ttk.Button(action_frame, text="💾 Simpan", command=self.save_and_send_qr, state=DISABLED)
+            self.save_btn = ttk.Button(action_frame, text="💾 Export ZIP", command=self.save_and_send_qr, state=DISABLED)
             self.telegram_btn = ttk.Button(action_frame, text="📨 Telegram", command=self.open_telegram_settings)
 
         self.save_btn.pack(side=LEFT, expand=True, fill=X, padx=(0, 4))
@@ -194,13 +217,23 @@ class QRCodeGenerator:
         preview_container = ttk.Frame(right_panel)
         preview_container.pack(expand=True)
 
-        self.canvas_qr = tk.Canvas(preview_container, width=380, height=380, bg='#F0F0F0',
-                                    bd=0, highlightthickness=1, highlightbackground="#CCCCCC")
-        self.canvas_qr.pack(pady=10)
+        preview_grid = ttk.Frame(preview_container)
+        preview_grid.pack(pady=10)
 
-        # Placeholder text
-        self.canvas_qr.create_text(190, 190, text="QR Code akan muncul\ndi sini",
-                                    font=("Segoe UI", 13), fill="#AAAAAA", justify="center", tags="placeholder")
+        self.canvas_qr = None
+        self.preview_canvases = []
+        for index in range(3):
+            card = ttk.Frame(preview_grid)
+            card.grid(row=0, column=index, padx=6, sticky=N)
+            ttk.Label(card, text=f"QR {index + 1}", font=("Segoe UI", 9, "bold")).pack(anchor=W)
+            canvas = tk.Canvas(card, width=180, height=180, bg='#F0F0F0',
+                               bd=0, highlightthickness=1, highlightbackground="#CCCCCC")
+            canvas.pack()
+            canvas.create_text(90, 90, text="Belum dibuat",
+                               font=("Segoe UI", 10), fill="#AAAAAA", justify="center", tags="placeholder")
+            self.preview_canvases.append(canvas)
+
+        self.canvas_qr = self.preview_canvases[0]
 
         # Info label
         self.info_label = ttk.Label(preview_container, text="", font=("Segoe UI", 9), foreground="gray", wraplength=350, justify="center")
@@ -224,8 +257,8 @@ class QRCodeGenerator:
     def _on_history_select(self, event):
         selected = self.history_combo.get()
         if selected:
-            self.url_entry.delete(0, END)
-            self.url_entry.insert(0, selected)
+            self.qr_inputs[0]["url"].delete(0, END)
+            self.qr_inputs[0]["url"].insert(0, selected)
 
     def pick_local_image(self):
         filepath = filedialog.askopenfilename(
@@ -326,11 +359,66 @@ class QRCodeGenerator:
             messagebox.showerror("Error", f"Gagal membuat QR Code:\n{e}")
             return None
 
-    def buat_qr(self):
-        url = self.url_entry.get().strip()
+    def sanitize_filename(self, filename, fallback):
+        safe_name = "".join(
+            char if char.isalnum() or char in (" ", "-", "_") else "_"
+            for char in filename.strip()
+        ).strip()
+        safe_name = "_".join(safe_name.split())
+        return safe_name or fallback
 
-        if not url or url == "https://":
-            messagebox.showwarning("Input Kosong", "Mohon masukkan URL tujuan QR Code!")
+    def collect_qr_requests(self):
+        requests_data = []
+        used_names = set()
+
+        for index, fields in enumerate(self.qr_inputs, start=1):
+            url = fields["url"].get().strip()
+            raw_name = fields["name"].get().strip()
+
+            if not url or url == "https://":
+                continue
+
+            filename = self.sanitize_filename(raw_name, f"qrcode_{index}")
+            base_filename = filename
+            counter = 2
+            while filename.lower() in used_names:
+                filename = f"{base_filename}_{counter}"
+                counter += 1
+
+            used_names.add(filename.lower())
+            requests_data.append({
+                "url": url,
+                "filename": filename,
+                "label": raw_name or filename,
+            })
+
+        return requests_data
+
+    def clear_previews(self):
+        self.qr_previews = []
+        for index, canvas in enumerate(self.preview_canvases, start=1):
+            canvas.delete("all")
+            canvas.create_text(90, 90, text="Belum dibuat",
+                               font=("Segoe UI", 10), fill="#AAAAAA", justify="center", tags="placeholder")
+
+    def update_previews(self):
+        self.qr_previews = []
+        for index, canvas in enumerate(self.preview_canvases):
+            canvas.delete("all")
+            if index < len(self.generated_qrs):
+                qr_data = self.generated_qrs[index]
+                preview = ImageTk.PhotoImage(qr_data["image"].resize((180, 180), Resampling.LANCZOS))
+                self.qr_previews.append(preview)
+                canvas.create_image(90, 90, anchor="center", image=preview)
+            else:
+                canvas.create_text(90, 90, text="Belum dibuat",
+                                   font=("Segoe UI", 10), fill="#AAAAAA", justify="center", tags="placeholder")
+
+    def buat_qr(self):
+        qr_requests = self.collect_qr_requests()
+
+        if not qr_requests:
+            messagebox.showwarning("Input Kosong", "Mohon masukkan minimal 1 URL tujuan QR Code!")
             return
 
         image_url = self.img_entry.get().strip()
@@ -342,43 +430,57 @@ class QRCodeGenerator:
             if not result:
                 return
 
-        self.qr_image = self.generate_qr_code_with_image(url)
+        self.generated_qrs = []
+        self.clear_previews()
 
-        if self.qr_image:
-            # Save to URL history
-            self.save_url_history(url)
+        for index, qr_request in enumerate(qr_requests, start=1):
+            self.status_var.set(f"⏳ Membuat QR Code {index}/{len(qr_requests)}...")
+            self.root.update()
 
-            # Clear placeholder and show preview
-            self.canvas_qr.delete("all")
-            preview_size = 380
-            self.qr_preview = ImageTk.PhotoImage(self.qr_image.resize((preview_size, preview_size), Resampling.LANCZOS))
-            self.canvas_qr.create_image(preview_size // 2, preview_size // 2, anchor="center", image=self.qr_preview)
+            qr_image = self.generate_qr_code_with_image(qr_request["url"])
+            if not qr_image:
+                return
 
-            # Enable save button
+            self.generated_qrs.append({
+                "url": qr_request["url"],
+                "filename": qr_request["filename"],
+                "image": qr_image,
+            })
+            self.save_url_history(qr_request["url"])
+
+        if self.generated_qrs:
+            self.qr_image = self.generated_qrs[0]["image"]
+            self.update_previews()
             self.save_btn.config(state=NORMAL)
 
-            # Show info
-            size = self.qr_image.size
-            self.info_label.config(text=f"Ukuran: {size[0]}×{size[1]}px  |  URL: {url[:50]}{'...' if len(url) > 50 else ''}")
+            total = len(self.generated_qrs)
+            filenames = ", ".join(f"{item['filename']}.png" for item in self.generated_qrs)
+            self.info_label.config(text=f"{total} QR Code siap diexport ZIP: {filenames}")
+            self.status_var.set(f"✅ {total} QR Code berhasil dibuat!")
 
     # ─── Save & Send ──────────────────────────────────────────────
     def save_and_send_qr(self):
-        if not self.qr_image:
+        if not self.generated_qrs:
             return
 
         filename = filedialog.asksaveasfilename(
-            defaultextension=".png",
-            filetypes=[("PNG Files", "*.png"), ("JPEG Files", "*.jpg"), ("All Files", "*.*")],
-            initialfile="qrcode_output"
+            defaultextension=".zip",
+            filetypes=[("ZIP Files", "*.zip"), ("All Files", "*.*")],
+            initialfile="qrcode_export.zip"
         )
         if filename:
-            self.qr_image.save(filename)
-            self.status_var.set(f"✅ QR Code disimpan: {os.path.basename(filename)}")
-            messagebox.showinfo("Berhasil", f"QR Code berhasil disimpan di:\n{filename}")
+            with zipfile.ZipFile(filename, "w", compression=zipfile.ZIP_DEFLATED) as zip_file:
+                for item in self.generated_qrs:
+                    image_buffer = BytesIO()
+                    item["image"].save(image_buffer, format="PNG")
+                    zip_file.writestr(f"{item['filename']}.png", image_buffer.getvalue())
+
+            self.status_var.set(f"✅ ZIP disimpan: {os.path.basename(filename)}")
+            messagebox.showinfo("Berhasil", f"ZIP QR Code berhasil disimpan di:\n{filename}")
 
             # Send to Telegram if configured
             if self.telegram_token and self.telegram_chat_id:
-                result = messagebox.askyesno("Kirim ke Telegram", "Kirim QR Code ke Telegram?")
+                result = messagebox.askyesno("Kirim ke Telegram", "Kirim ZIP QR Code ke Telegram?")
                 if result:
                     self.status_var.set("📨 Mengirim ke Telegram...")
                     self.root.update()
@@ -387,10 +489,11 @@ class QRCodeGenerator:
     def send_to_telegram(self, file_path):
         try:
             bot = telebot.TeleBot(self.telegram_token)
-            with open(file_path, 'rb') as photo:
-                bot.send_photo(self.telegram_chat_id, photo, caption=f"🔲 QR Code: {self.url_entry.get()}")
-            self.status_var.set("✅ QR Code berhasil dikirim ke Telegram!")
-            messagebox.showinfo("Berhasil", "QR Code berhasil dikirim ke Telegram!")
+            caption = f"🔲 Export {len(self.generated_qrs)} QR Code"
+            with open(file_path, 'rb') as document:
+                bot.send_document(self.telegram_chat_id, document, caption=caption)
+            self.status_var.set("✅ ZIP QR Code berhasil dikirim ke Telegram!")
+            messagebox.showinfo("Berhasil", "ZIP QR Code berhasil dikirim ke Telegram!")
         except Exception as e:
             self.status_var.set("❌ Gagal mengirim ke Telegram")
             messagebox.showerror("Error Telegram", f"Gagal mengirim ke Telegram:\n{e}")
@@ -487,14 +590,14 @@ if __name__ == "__main__":
         root = ttk.Window(
             title="QR Code Generator",
             themename="darkly",
-            size=(820, 620),
-            minsize=(820, 620),
+            size=(980, 680),
+            minsize=(980, 680),
         )
     else:
         root = tk.Tk()
         root.title("QR Code Generator")
-        root.geometry("820x620")
-        root.minsize(820, 620)
+        root.geometry("980x680")
+        root.minsize(980, 680)
 
     app = QRCodeGenerator(root)
     root.mainloop()
